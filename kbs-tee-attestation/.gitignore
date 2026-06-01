@@ -1,0 +1,4 @@
+operator.env
+inputs/dek.bin
+inputs/cosign.key
+output/

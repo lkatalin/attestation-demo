@@ -1,0 +1,17 @@
+{
+  "default": [
+    {
+      "type": "reject"
+    }
+  ],
+  "transports": {
+    "docker": {
+      "__IMAGE_REF__": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "kbs:///default/confidential-inferencing-signature/pub-key"
+        }
+      ]
+    }
+  }
+}
