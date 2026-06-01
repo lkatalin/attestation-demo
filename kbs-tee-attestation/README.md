@@ -76,14 +76,6 @@ Assume the model owner has already:
 
 Copy files into `inputs/` or set `DEK_FILE` / `COSIGN_PUB` in `operator.env`.
 
-### 4. Inference cluster (not configured here)
-
-The **inference** cluster operator must do this **after** you share `output/`:
-
-- Apply **`initdata.toml`** to peer-pods (`INITDATA` in `peer-pods-cm`) — must match **this** KBS URL, CA, and RVPS.
-- Set workload `KBS_URL`, mount `kbs-ca`, `KBS_RESOURCE_PATH` (see main repo `config/inference-remote.env.example`).
-- Build workload image with **`kbs-client` + `az-snp-vtpm-attester`** (`make build-kbs-client` in parent repo).
-
 ## Quick start (KBS cluster)
 
 ```bash
@@ -99,12 +91,170 @@ make configure
 
 `configure` runs: ensure remote attestation → register policy → register DEK → SNP resource policy → export endpoint → verify.
 
-Share **`output/`** with the inference cluster team:
+Share the entire **`output/`** directory with the inference / model-owner team (secure channel). That is the handoff after `make configure`.
 
-- `kbs.url` — HTTPS KBS base URL  
-- `kbs-ca.pem` — TLS trust anchor for guests  
-- `kbs-resource-path.txt` — e.g. `default/confidential-inferencing-dek/dek`  
-- `initdata.toml` — peer-pods initdata (if present)
+## How the KBS operator gets the link
+
+The **link** is the public HTTPS base URL of KBS. It is **not** chosen in this repo; OpenShift creates it when the KBS **Route** exists.
+
+| Step | Who | What happens |
+|------|-----|----------------|
+| 1 | coco-infra or `ensure-remote-attestation.sh` | Creates Route `kbs-service` in `trustee-operator-system`, pointing at Service `kbs-service` (passthrough TLS). |
+| 2 | OpenShift | Assigns a hostname, e.g. `https://kbs-service-trustee-operator-system.apps.<cluster-id>.<region>.aroapp.io`. |
+| 3 | `make export-endpoint` | Reads that hostname and writes **`output/kbs.url`** (one line, no trailing path). |
+| 4 | You | Send `output/` to the inference team. |
+
+**On the KBS cluster you can always re-read the link:**
+
+```bash
+oc get route kbs-service -n trustee-operator-system \
+  -o jsonpath='https://{.spec.host}{"\n"}'
+
+cat output/kbs.url
+```
+
+**TLS trust:** `output/kbs-ca.pem` is the KBS server certificate (from Secret `trustee-tls-cert`). Guests must trust this CA when calling KBS over HTTPS.
+
+**Health check (from a machine that can reach the route):**
+
+```bash
+curl -sk "$(cat output/kbs.url)/kbs/v0/health"
+```
+
+If `export-endpoint` did not copy `initdata.toml`, set `INITDATA_PATH` to your coco-infra `trustee/initdata.toml` and re-run `make export-endpoint`. That file is generated when Trustee was first configured and already embeds the same KBS URL and cert for the guest stack.
+
+---
+
+## After KBS setup: configure the TEE for this remote KBS
+
+These steps run on the **inference cluster** (CoCo + peer pods), not on the KBS cluster. The KBS operator only **provides** `output/`; the model owner or platform team **applies** it.
+
+### Handoff checklist (KBS operator → inference team)
+
+| File in `output/` | Purpose |
+|-------------------|---------|
+| `kbs.url` | Base URL for workload env and sanity checks |
+| `kbs-ca.pem` | TLS CA for `kbs-client` and to verify it matches initdata |
+| `kbs-resource-path.txt` | DEK path for `KBS_RESOURCE_PATH` (e.g. `default/confidential-inferencing-dek/dek`) |
+| `initdata.toml` | **Required** for peer pods — pins KBS URL + cert inside the confidential VM |
+
+### Inference cluster steps
+
+Using the parent repo (from the confidential-inferencing tree):
+
+```bash
+cp config/inference-remote.env.example config/inference-remote.env
+```
+
+Edit `inference-remote.env`:
+
+```bash
+export KBS_URL=$(cat /path/to/output/kbs.url)          # or paste the https://... line
+export KBS_CA_FILE=/path/to/output/kbs-ca.pem
+export INITDATA_PATH=/path/to/output/initdata.toml
+# optional if non-default:
+# export KBS_RESOURCE_PATH=$(cat /path/to/output/kbs-resource-path.txt)
+```
+
+Then on the **inference** cluster:
+
+```bash
+set -a && source config/inference-remote.env && set +a
+oc login <inference-cluster>
+
+make remote-apply-initdata    # peer-pods INITDATA ← initdata.toml
+make fix-peer-pods            # Azure region / VM size for peer pods (if needed)
+make remote-configure-kbs     # ConfigMap kbs-ca + deploy/kbs.env from KBS_URL
+make remote-deploy            # confidential deployment with KBS_* env
+```
+
+Or one shot after env is set: `make remote-cluster` (from parent `Makefile`).
+
+**Workload image:** build with SNP `kbs-client` (`make build-kbs-client` then `make build` in the parent repo). Without `az-snp-vtpm-attester`, the guest falls back to `sample` attestation and KBS will deny the DEK.
+
+**CoCo prerequisites on inference cluster:** `RuntimeClass kata-remote`, peer-pods operator configured, signed image pullable.
+
+---
+
+## Where the KBS link is visible to the TEE
+
+The confidential **TEE** is the AMD SNP guest inside a **peer pod** (`runtimeClassName: kata-remote`). The KBS URL must appear in **two places** — they must be the **same** URL and compatible trust anchors, or attestation succeeds for one path and fails for the other.
+
+```mermaid
+flowchart TB
+  subgraph kbs_cluster [KBS cluster]
+    Route["Route kbs-service\n→ https://...aroapp.io"]
+    KBS["Trustee / KBS"]
+    Route --> KBS
+  end
+
+  subgraph inference [Inference cluster]
+    CM["peer-pods-cm\nINITDATA = gzip+base64(initdata.toml)"]
+    Deploy["Deployment inference-confidential\nenv: KBS_URL, KBS_RESOURCE_PATH\nvolume: kbs-ca ConfigMap"]
+    PP["Peer pods → confidential VM"]
+    CM --> PP
+    Deploy --> PP
+  end
+
+  subgraph guest [Inside confidential VM]
+    AA["Attestation Agent\naa.toml: token_configs.kbs.url"]
+    CDH["Confidential Data Hub\ncdh.toml: kbc.url"]
+    KC["kbs-client in entrypoint\n--url $KBS_URL"]
+    AA --> KBS
+    CDH --> KBS
+    KC --> KBS
+  end
+
+  PP --> guest
+  Route -.->|"output/kbs.url handoff"| Deploy
+  Route -.->|"embedded in initdata.toml"| CM
+```
+
+### 1. Inside the VM at boot — `initdata.toml` (hardware / image path)
+
+**Who applies it:** inference cluster — `make remote-apply-initdata` patches ConfigMap `peer-pods-cm` in `openshift-sandboxed-containers-operator`, field **`INITDATA`** (gzip-compressed, base64-encoded `initdata.toml`).
+
+**Who consumes it:** peer-pods when creating the confidential VM. The guest **Attestation Agent** and **Confidential Data Hub (CDH)** read embedded config, including:
+
+| Embedded file | KBS-related fields | Used for |
+|---------------|-------------------|----------|
+| `aa.toml` | `token_configs.kbs.url`, `token_configs.kbs.cert`, `token_configs.coco_as.url` | Attestation handshake with KBS (CoCo AS tokens) |
+| `cdh.toml` | `kbc.url`, `kbc.kbs_cert`, `image_security_policy_uri` → `kbs:///default/trustee-image-policy/policy` | Pulling the **cosign-signed** workload image via KBS |
+
+So the TEE “sees” the KBS link **before your container entrypoint runs**, as part of the measured guest environment. That is what makes **image pull** attestation go to **your** remote KBS.
+
+**Important:** `initdata.toml` is produced on the **KBS cluster** during `coco-infra/aro/configure-trustee.sh`. Its URLs must match `output/kbs.url`. If you recreate the Route or TLS cert, regenerate initdata on the KBS cluster and re-export.
+
+### 2. In the workload pod — `KBS_URL` env + `kbs-ca` ConfigMap (DEK path)
+
+**Who applies it:** `make remote-configure-kbs` in the parent repo writes `deploy/kbs.env` and creates ConfigMap **`kbs-ca`** in the workload namespace (`ca.pem` from `kbs-ca.pem`).
+
+**Who consumes it:** the inference container entrypoint calls **`kbs-client`** with:
+
+- `KBS_URL` — from Deployment env (substituted from `kbs.url` at deploy time)
+- `KBS_CERT_FILE` — `/etc/kbs/ca.pem` (mounted from ConfigMap `kbs-ca`)
+- `KBS_RESOURCE_PATH` — from `kbs-resource-path.txt`
+
+That path fetches the **DEK** after SNP attestation (`get-resource`), separate from CDH image pull.
+
+You can confirm what the pod uses:
+
+```bash
+oc get deploy inference-confidential -n confidential-inferencing \
+  -o jsonpath='KBS_URL={.spec.template.spec.containers[0].env[?(@.name=="KBS_URL")].value}{"\n"}'
+oc get configmap kbs-ca -n confidential-inferencing -o yaml | head
+```
+
+### Two attestation flows, one KBS URL
+
+| Flow | Component in TEE | When | KBS URL source |
+|------|------------------|------|----------------|
+| Signed image pull | CDH + guest AA | VM / container start (image unpack) | `initdata.toml` → `cdh.toml` / `aa.toml` |
+| DEK release | `kbs-client` in entrypoint | After container starts | Pod env `KBS_URL` + `kbs-ca` |
+
+Both hit the same Route; Trustee logs show `POST /attest` and `GET` for image policy and DEK resources.
+
+---
 
 ## Order of operations (summary)
 
@@ -120,12 +270,13 @@ flowchart LR
     E[output/ handoff]
   end
   subgraph after [After handoff - inference cluster]
-    F[peer-pods initdata]
-    G[deploy confidential workload]
+    F["peer-pods INITDATA\n(initdata.toml)"]
+    G["KBS_URL + kbs-ca\n+ deploy"]
+    H[confidential pod in CVM]
   end
   A --> B --> D
   C --> D
-  D --> E --> F --> G
+  D --> E --> F --> G --> H
 ```
 
 ## Verify attestation works

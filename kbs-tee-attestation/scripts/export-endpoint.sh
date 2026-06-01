@@ -25,6 +25,16 @@ elif [[ -f "${COCO_ARO:-$REPO_ROOT/../coco-infra/aro}/trustee/initdata.toml" ]];
   cp -f "${COCO_ARO:-$REPO_ROOT/../coco-infra/aro}/trustee/initdata.toml" "$OUT_DIR/initdata.toml"
 fi
 
+echo ""
 echo "Endpoint bundle written to $OUT_DIR:"
 ls -la "$OUT_DIR/kbs.url" "$OUT_DIR/kbs-ca.pem" "$OUT_DIR/kbs-resource-path.txt"
 [[ -f "$OUT_DIR/initdata.toml" ]] && echo "  initdata.toml — give to inference cluster for peer-pods INITDATA"
+echo ""
+echo "KBS link (share with inference team):"
+echo "  $(cat "$OUT_DIR/kbs.url")"
+echo ""
+echo "On inference cluster they should:"
+echo "  1. remote-apply-initdata  (INITDATA in peer-pods-cm ← initdata.toml)"
+echo "  2. remote-configure-kbs   (KBS_URL + kbs-ca ConfigMap ← kbs.url + kbs-ca.pem)"
+echo "  3. deploy confidential workload (kata-remote)"
+echo "See kbs-tee-attestation/README.md § After KBS setup / Where the KBS link is visible to the TEE"
