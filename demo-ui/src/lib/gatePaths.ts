@@ -66,7 +66,7 @@ function offsetVector(from: Point, to: Point, distance: number): Point {
 }
 
 export function laneOffset(kind: FlowKind): number {
-  return isAttestKind(kind) ? -11 : 11;
+  return isAttestKind(kind) ? -16 : 16;
 }
 
 export function applyLaneOffset(

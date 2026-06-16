@@ -15,6 +15,8 @@
   --color-attest: #ffb020;
   --color-image-policy: #9d6bff;
   --color-dek-policy: #b8ff3c;
+  --color-kubelet-pull: #7eb8da;
+  --text-dim: #5a6488;
   --border: rgba(255, 255, 255, 0.08);
   --font: "Outfit", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
@@ -236,6 +238,52 @@ body {
 
 .flow-path.status-deny {
   animation: dash-deny 0.8s linear infinite;
+}
+
+.flow-path.status-pending,
+.flow-path.status-verifying {
+  opacity: 0.5;
+  animation: dash 1.4s linear infinite;
+}
+
+.flow-path.status-pass.kind-kubelet-pull {
+  stroke-dasharray: none;
+  animation: pulse-pass 2.5s ease-in-out infinite;
+}
+
+.registry-node {
+  min-width: 0;
+  width: 118px;
+  padding: 0.65rem 0.75rem;
+  border-radius: 999px;
+  text-align: center;
+  border-color: color-mix(in srgb, var(--color-kubelet-pull) 55%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--color-kubelet-pull) 16%, transparent);
+  cursor: grab;
+  z-index: 3;
+}
+
+.registry-node:hover {
+  border-color: color-mix(in srgb, var(--color-kubelet-pull) 75%, transparent);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--color-kubelet-pull) 28%, transparent);
+}
+
+.registry-node .node-title {
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.registry-node .node-sub {
+  font-size: 0.58rem;
+  margin-top: 0.1rem;
+}
+
+.registry-icon {
+  display: block;
+  font-size: 1.35rem;
+  line-height: 1;
+  margin-bottom: 0.15rem;
+  color: var(--color-kubelet-pull);
 }
 
 .flow-path.hovered,

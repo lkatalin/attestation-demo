@@ -4,6 +4,8 @@ import type { AttestationFlow, PodInfo } from "../types";
 export const VB_W = 900;
 export const VB_H = 520;
 
+export const DEFAULT_REGISTRY_POS: Point = { x: 450, y: 72 };
+
 export type Point = { x: number; y: number };
 
 export function posStyle(p: Point): CSSProperties {
@@ -52,7 +54,10 @@ export function buildDefaultPositions(
 ): Record<string, Point> {
   const kbs: Point = { x: 720, y: 260 };
   const pendingCvm: Point = { x: 140, y: 260 };
-  const positions: Record<string, Point> = { kbs };
+  const positions: Record<string, Point> = {
+    kbs,
+    registry: { ...DEFAULT_REGISTRY_POS },
+  };
 
   cvms.forEach((pod, i) => {
     positions[pod.name] = {

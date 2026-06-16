@@ -7,6 +7,9 @@ export const ROLE_KBS = "var(--role-kbs)";
 /** Confidential VM shell. */
 export const ROLE_CVM = "var(--role-cvm)";
 
+/** Kubelet registry pull (not a KBS gate). */
+export const COLOR_KUBELET_PULL = "var(--color-kubelet-pull)";
+
 /** Hardware attestation paths (both gates). */
 export const COLOR_ATTEST = "var(--color-attest)";
 
@@ -17,6 +20,7 @@ export const COLOR_IMAGE_POLICY = "var(--color-image-policy)";
 export const COLOR_DEK_POLICY = "var(--color-dek-policy)";
 
 export const COLOR_DENY = "var(--neon-magenta)";
+export const COLOR_PENDING = "var(--text-dim)";
 
 export function policyColor(kind: FlowKind): string {
   switch (kind) {
@@ -31,9 +35,11 @@ export function policyColor(kind: FlowKind): string {
 
 export function pathStrokeColor(flow: AttestationFlow): string {
   if (flow.status === "deny") return COLOR_DENY;
-  if (flow.status === "verifying" && isAttestKind(flow.kind)) {
-    return COLOR_ATTEST;
+  if (flow.status === "pending" || flow.status === "verifying") {
+    if (flow.kind === "kubelet-pull") return COLOR_KUBELET_PULL;
+    return COLOR_PENDING;
   }
+  if (flow.kind === "kubelet-pull") return COLOR_KUBELET_PULL;
   if (isAttestKind(flow.kind)) {
     return COLOR_ATTEST;
   }
@@ -45,6 +51,8 @@ export function pathGlowFilter(flow: AttestationFlow): string | undefined {
   if (flow.status !== "pass") return undefined;
 
   switch (flow.kind as string) {
+    case "kubelet-pull":
+      return "url(#glow-cyan)";
     case "attest-image":
     case "attest-dek":
     case "attest":

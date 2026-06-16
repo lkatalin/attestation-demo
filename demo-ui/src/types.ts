@@ -8,10 +8,18 @@ export interface PodInfo {
   runtimeClass: string;
   createdAt: string;
   restartCount: number;
+  imagePulled?: boolean;
+  containerStarted?: boolean;
+  containerWaitingReason?: string;
   isGolden?: boolean;
 }
 
-export type FlowKind = "attest-image" | "attest-dek" | "image-policy" | "dek-policy";
+export type FlowKind =
+  | "kubelet-pull"
+  | "attest-image"
+  | "attest-dek"
+  | "image-policy"
+  | "dek-policy";
 export type FlowStatus = "pending" | "verifying" | "pass" | "deny";
 
 export interface AttestationFlow {

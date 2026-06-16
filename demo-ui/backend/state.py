@@ -8,9 +8,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .log_parser import AttestationFlow, LogParser, RE_TEE_IN_LINE
+from .pod_lifecycle import PodLifecycleTracker
+from .pod_parse import pod_from_k8s, watch_event_pod
 from . import oc_client
 
 Listener = Callable[[dict[str, Any]], None]
+
+PARSER_REV = "2025-06-16-golden-policy"
 
 
 class DemoState:
@@ -18,6 +22,7 @@ class DemoState:
         self._lock = threading.RLock()
         self._listeners: list[Listener] = []
         self.parser = LogParser()
+        self.lifecycle = PodLifecycleTracker()
         self.connected = False
         self.cluster_user = ""
         self.error: str | None = None
@@ -43,9 +48,17 @@ class DemoState:
             except Exception:
                 pass
 
+    def _all_flow_dicts(self) -> list[dict[str, Any]]:
+        merged = self.parser.flows_for_display(self.pods) + self.lifecycle.flows()
+        return [f.to_dict() for f in merged]
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             if self.pods:
+                active = {p["name"] for p in self.pods if p.get("name")}
+                self.parser.prune_pods(active)
+                for pod in self.pods:
+                    self.lifecycle.sync_pod(pod)
                 self.parser.repair_attribution(self.pods)
             golden = self._golden_pod_name()
             pods = []
@@ -62,8 +75,9 @@ class DemoState:
                 "kbs": dict(self.kbs),
                 "initdata": self.initdata,
                 "pods": pods,
-                "flows": [f.to_dict() for f in self.parser.flows],
+                "flows": self._all_flow_dicts(),
                 "timeline": list(self.timeline[-100:]),
+                "parserRev": PARSER_REV,
             }
 
     def _golden_pod_name(self) -> str | None:
@@ -84,6 +98,7 @@ class DemoState:
 
         try:
             self.pods = oc_client.get_pods()
+            self._dedupe_pods()
             self.initdata = oc_client.get_initdata_toml()
             host = oc_client.get_confidential_route_host()
             self.kbs = {
@@ -93,7 +108,26 @@ class DemoState:
                 "secrets": oc_client.get_kbs_secrets(),
             }
             self._detect_act()
+            active = {p["name"] for p in self.pods if p.get("name")}
+            self.parser.prune_pods(active)
+            lifecycle_changed: list[AttestationFlow] = []
+            for pod in self.pods:
+                lifecycle_changed.extend(self.lifecycle.sync_pod(pod))
             self.parser.repair_attribution(self.pods)
+            if self.parser.golden_missing_policy_passes(self.pods):
+                tail = oc_client.fetch_trustee_tail(600)
+                if tail:
+                    self.parser.backfill_golden_from_trustee(tail, self.pods)
+            for flow in lifecycle_changed:
+                self.note_timeline(
+                    self.parser.timeline_label(flow)
+                    + (f" → {flow.source_pod}" if flow.source_pod else ""),
+                    level="pass"
+                    if flow.status == "pass"
+                    else "deny"
+                    if flow.status == "deny"
+                    else "info",
+                )
         except RuntimeError as exc:
             self.error = str(exc)
 
@@ -123,28 +157,29 @@ class DemoState:
         self.timeline.append(entry)
         self._emit({"type": "timeline", "entry": entry})
 
+    def _dedupe_pods(self) -> None:
+        by_name: dict[str, dict[str, Any]] = {}
+        for pod in self.pods:
+            name = pod.get("name")
+            if name:
+                by_name[name] = pod
+        self.pods = sorted(by_name.values(), key=lambda p: p.get("createdAt", ""))
+
     def on_pod_watch(self, event: dict[str, Any]) -> None:
-        obj = event.get("object", {})
+        etype, obj = watch_event_pod(event)
+        if not obj:
+            return
         meta = obj.get("metadata", {})
         name = meta.get("name", "")
-        etype = event.get("type", "")
+        if not name:
+            return
         if etype == "DELETED":
             self.pods = [p for p in self.pods if p.get("name") != name]
+            self.lifecycle.remove_pod(name)
+            self.parser.prune_pods({p["name"] for p in self.pods})
             self.note_timeline(f"Pod deleted: {name}")
         else:
-            status = obj.get("status", {})
-            spec = obj.get("spec", {})
-            labels = meta.get("labels", {})
-            cs = (status.get("containerStatuses") or [{}])[0]
-            pod = {
-                "name": name,
-                "role": labels.get("demo-role", "unknown"),
-                "phase": status.get("phase", "Unknown"),
-                "ready": bool(cs.get("ready")),
-                "runtimeClass": spec.get("runtimeClassName") or "",
-                "createdAt": meta.get("creationTimestamp", ""),
-                "restartCount": cs.get("restartCount", 0),
-            }
+            pod = pod_from_k8s(obj)
             found = False
             for i, p in enumerate(self.pods):
                 if p.get("name") == name:
@@ -153,12 +188,27 @@ class DemoState:
                     break
             if not found:
                 self.pods.append(pod)
+            self._dedupe_pods()
             if etype == "ADDED":
                 self.note_timeline(f"Pod added: {name} ({pod['role']})")
             self._detect_act()
+            active = {p["name"] for p in self.pods if p.get("name")}
+            self.parser.prune_pods(active)
+            lifecycle_changed = self.lifecycle.sync_pod(pod)
+            for flow in lifecycle_changed:
+                self.note_timeline(
+                    self.parser.timeline_label(flow)
+                    + (f" → {flow.source_pod}" if flow.source_pod else ""),
+                    level="pass"
+                    if flow.status == "pass"
+                    else "deny"
+                    if flow.status == "deny"
+                    else "info",
+                )
             backfilled = self.parser.backfill_pods(self.pods)
-            if backfilled:
-                self._emit({"type": "flows", "flows": [f.to_dict() for f in backfilled]})
+            changed = list(lifecycle_changed) + list(backfilled)
+            if changed:
+                self._emit({"type": "flows", "flows": [f.to_dict() for f in changed]})
         self._emit({"type": "state", "state": self.snapshot()})
 
     def on_trustee_line(self, line: str) -> None:
@@ -202,8 +252,13 @@ class DemoState:
         """Reset live session artifacts; keep current cluster snapshot."""
         with self._lock:
             self.parser = LogParser()
+            self.lifecycle = PodLifecycleTracker()
             self.timeline = []
             self.refresh_static()
+            if self.parser.golden_missing_policy_passes(self.pods):
+                tail = oc_client.fetch_trustee_tail(800)
+                if tail:
+                    self.parser.backfill_golden_from_trustee(tail, self.pods)
         snap = self.snapshot()
         self._emit({"type": "state", "state": snap})
         return snap

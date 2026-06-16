@@ -5,7 +5,8 @@ import { useDraggableLayout } from "../hooks/useDraggableLayout";
 import { buildGatePathGeometry } from "../lib/gatePaths";
 import { pathGlowFilter, pathStrokeColor } from "../lib/demoColors";
 import { normalizeFlowsForDisplay } from "../lib/flowNormalize";
-import { posStyle } from "../lib/topologyCoords";
+import { buildKubeletPullGeometry } from "../lib/pullPaths";
+import { posStyle, resolveFlowEndpoint } from "../lib/topologyCoords";
 
 interface Props {
   state: DemoState | null;
@@ -76,9 +77,25 @@ export function TopologyCanvas({
   } = useDraggableLayout(cvms, others, showPendingCvm, layoutEpoch);
 
   const kbsPos = positions.kbs ?? { x: 720, y: 260 };
+  const registryPos = positions.registry ?? { x: 450, y: 72 };
+
+  const kbsFlows = useMemo(
+    () => activeFlows.filter((f) => f.kind !== "kubelet-pull"),
+    [activeFlows]
+  );
+  const pullFlows = useMemo(() => {
+    return activeFlows.filter((f) => {
+      if (f.kind !== "kubelet-pull") return false;
+      if (f.status !== "deny") return true;
+      const pod = pods.find((p) => p.name === f.sourcePod);
+      // DEK/guest failures are not registry pulls — never draw a deny arc to registry on CVMs.
+      if (pod?.role === "confidential") return false;
+      return true;
+    });
+  }, [activeFlows, pods]);
 
   const flowGeometry = useMemo(() => {
-    return activeFlows
+    return kbsFlows
       .map((flow) =>
         buildGatePathGeometry(flow, positions, kbsPos, cvms, others, showPendingCvm, {
           kbsExpanded: kbsHovered,
@@ -88,7 +105,7 @@ export function TopologyCanvas({
       )
       .filter((geo): geo is NonNullable<typeof geo> => geo !== null);
   }, [
-    activeFlows,
+    kbsFlows,
     positions,
     kbsPos,
     cvms,
@@ -98,6 +115,22 @@ export function TopologyCanvas({
     kbsHovered,
     hoveredCvm,
   ]);
+
+  const pullGeometry = useMemo(() => {
+    return pullFlows
+      .map((flow) => {
+        const podPos = resolveFlowEndpoint(
+          flow.sourcePod,
+          flow.tee,
+          positions,
+          cvms,
+          others,
+          showPendingCvm
+        );
+        return buildKubeletPullGeometry(flow, podPos, registryPos);
+      })
+      .filter((geo): geo is NonNullable<typeof geo> => geo !== null);
+  }, [pullFlows, positions, registryPos, cvms, others, showPendingCvm]);
 
   return (
     <div
@@ -145,6 +178,47 @@ export function TopologyCanvas({
             </feMerge>
           </filter>
         </defs>
+
+        {pullGeometry.map(({ flow, d, labelPt }) => {
+          const color = pathStrokeColor(flow);
+          const selected = flow.id === selectedFlowId;
+          const hovered = hoverFlow?.id === flow.id;
+          const active = hovered || selected;
+          return (
+            <g key={`pull:${flow.id}`} className="flow-group">
+              <path
+                d={d}
+                className="flow-path-hit"
+                fill="none"
+                stroke="transparent"
+                strokeWidth={14}
+                onClick={() => onFlowClick(flow)}
+                onMouseEnter={() => onFlowHover(flow)}
+                onMouseLeave={() => onFlowHover(null)}
+              />
+              <path
+                d={d}
+                className={`flow-path kind-${flow.kind} status-${flow.status} ${selected ? "selected" : ""} ${hovered ? "hovered" : ""}`}
+                fill="none"
+                stroke={color}
+                strokeWidth={active ? 3 : 2}
+                pointerEvents="none"
+                filter={pathGlowFilter(flow)}
+              />
+              {active && (
+                <text
+                  x={labelPt.x}
+                  y={labelPt.y}
+                  className="path-label"
+                  textAnchor="middle"
+                  pointerEvents="none"
+                >
+                  {friendlyPathLabel(flow)}
+                </text>
+              )}
+            </g>
+          );
+        })}
 
         {flowGeometry.map(({ flow, gateKey, control, labelPt, d }) => {
           const color = pathStrokeColor(flow);
@@ -204,6 +278,11 @@ export function TopologyCanvas({
           );
         })}
       </svg>
+
+      <RegistryNode
+        style={posStyle(registryPos)}
+        onPointerDown={onNodePointerDown}
+      />
 
       <KbsNode
         style={posStyle(kbsPos)}
@@ -276,6 +355,30 @@ export function TopologyCanvas({
           </DraggableNode>
         );
       })}
+    </div>
+  );
+}
+
+function RegistryNode({
+  style,
+  onPointerDown,
+}: {
+  style: CSSProperties;
+  onPointerDown: (id: string, e: React.PointerEvent) => void;
+}) {
+  return (
+    <div
+      className="node registry-node draggable"
+      style={style}
+      onPointerDown={(e) => onPointerDown("registry", e)}
+      title="Kubelet pulls outer/workload images from here — not the CDH/KBS path inside CVMs"
+    >
+      <span className="registry-icon" aria-hidden>
+        ◎
+      </span>
+      <span className="node-title">Container registry</span>
+      <span className="node-sub">kubelet image pull</span>
+      <span className="drag-hint">drag to move</span>
     </div>
   );
 }
@@ -467,6 +570,17 @@ function PodNode({
 }
 
 function friendlyPathLabel(flow: AttestationFlow): string {
+  if (flow.kind === "kubelet-pull") {
+    const outer = flow.trigger?.includes("peer-pod");
+    if (flow.status === "pass") {
+      return outer ? "Peer-pod outer image on worker" : "Workload image on worker";
+    }
+    if (flow.status === "verifying") {
+      return outer ? "Kubelet: pulling peer-pod outer image…" : "Kubelet: pulling workload image…";
+    }
+    if (flow.status === "deny") return "Kubelet: registry pull failed";
+    return "Kubelet: pull scheduled";
+  }
   if (flow.kind === "attest-image") {
     return flow.status === "pass"
       ? "Hardware attestation (image gate)"
@@ -478,9 +592,12 @@ function friendlyPathLabel(flow: AttestationFlow): string {
       : "Hardware attestation failed";
   }
   if (flow.kind === "image-policy") {
+    if (flow.status === "pending" || flow.status === "verifying") {
+      return "CDH: requesting signed image policy…";
+    }
     return flow.status === "deny"
-      ? "Image pull blocked by policy"
-      : "Image pull policy passed";
+      ? "CDH image pull blocked by KBS policy"
+      : "CDH signed image pull allowed";
   }
   return flow.status === "deny"
     ? "DEK release blocked by policy"

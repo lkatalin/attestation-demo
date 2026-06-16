@@ -9,6 +9,8 @@ import os
 import subprocess
 from typing import Any
 
+from .pod_parse import pod_from_k8s
+
 TRUSTEE_NS = os.environ.get("TRUSTEE_NS", "trustee-operator-system")
 DEMO_NAMESPACE = os.environ.get("DEMO_NAMESPACE", "confidential-inferencing")
 PEER_NS = os.environ.get("PEER_NS", "openshift-sandboxed-containers-operator")
@@ -52,22 +54,7 @@ def get_pods(namespace: str = DEMO_NAMESPACE) -> list[dict[str, Any]]:
     data = json.loads(raw)
     pods: list[dict[str, Any]] = []
     for item in data.get("items", []):
-        meta = item.get("metadata", {})
-        status = item.get("status", {})
-        spec = item.get("spec", {})
-        labels = meta.get("labels", {})
-        cs = (status.get("containerStatuses") or [{}])[0]
-        pods.append(
-            {
-                "name": meta.get("name", ""),
-                "role": labels.get("demo-role", "unknown"),
-                "phase": status.get("phase", "Unknown"),
-                "ready": bool(cs.get("ready")),
-                "runtimeClass": spec.get("runtimeClassName") or "",
-                "createdAt": meta.get("creationTimestamp", ""),
-                "restartCount": cs.get("restartCount", 0),
-            }
-        )
+        pods.append(pod_from_k8s(item))
     pods.sort(key=lambda p: p.get("createdAt", ""))
     return pods
 
@@ -164,6 +151,22 @@ def get_confidential_route_host() -> str:
         return ""
 
 
+def fetch_trustee_tail(lines: int = 500) -> list[str]:
+    """One-shot trustee log tail (for golden CVM policy backfill)."""
+    try:
+        raw = _oc(
+            "logs",
+            "-n",
+            TRUSTEE_NS,
+            "deployment/trustee-deployment",
+            f"--tail={lines}",
+            timeout=45,
+        )
+    except RuntimeError:
+        return []
+    return [ln.rstrip("\n") for ln in raw.splitlines() if ln.strip()]
+
+
 def stream_trustee_logs():
     """Yield trustee log lines: recent tail first, then follow."""
     proc = subprocess.Popen(
@@ -217,9 +220,15 @@ def watch_pods(namespace: str = DEMO_NAMESPACE):
             if not line:
                 continue
             try:
-                yield json.loads(line)
+                payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(payload, dict) and payload.get("kind") == "List":
+                for item in payload.get("items") or []:
+                    if isinstance(item, dict) and item.get("kind") == "Pod":
+                        yield {"type": "ADDED", "object": item}
+                continue
+            yield payload
     finally:
         proc.terminate()
         proc.wait(timeout=5)
