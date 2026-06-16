@@ -302,7 +302,7 @@ oc logs -n trustee-operator-system deployment/trustee-deployment --tail=50 \
 |---------------|--------|
 | No `/attest` lines | Guest cannot reach KBS URL; fix route/firewall/initdata |
 | `tee=Sample` + `PolicyDeny` on DEK | Non-CVM or `kbs-client` without SNP attester |
-| `PolicyDeny` on `trustee-image-policy` with `tee=AzSnpVtpm` | Re-run `make apply-resource-policy` |
+| `PolicyDeny` on `trustee-image-policy` with `tee=AzSnpVtpm` in verify logs | Rego checked `AzSnpVtpm` instead of token key `az-snp-vtpm` | Re-run `make apply-resource-policy` |
 | Image pull denied | Image not signed or wrong `IMAGE` in policy |
 
 ## Makefile targets

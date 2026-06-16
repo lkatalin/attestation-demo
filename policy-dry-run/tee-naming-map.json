@@ -1,0 +1,29 @@
+{
+  "description": "Trustee verifier log labels (Rust Tee enum) vs JWT annotated-evidence keys (serde rename). Rego must use the token key column.",
+  "mappings": [
+    {
+      "log_tee": "AzSnpVtpm",
+      "token_key": "az-snp-vtpm",
+      "attester_feature": "az-snp-vtpm-attester",
+      "notes": "AMD SNP peer-pod CVM on Azure"
+    },
+    {
+      "log_tee": "Sample",
+      "token_key": "sample",
+      "attester_feature": null,
+      "notes": "kbs-client fallback when no hardware attester is linked"
+    },
+    {
+      "log_tee": "Tdx",
+      "token_key": "tdx",
+      "attester_feature": "tdx-attester",
+      "notes": "Intel TDX (not used in this demo)"
+    },
+    {
+      "log_tee": "Snp",
+      "token_key": "snp",
+      "attester_feature": "snp-attester",
+      "notes": "Generic SNP (not Azure vTPM wrapper)"
+    }
+  ]
+}

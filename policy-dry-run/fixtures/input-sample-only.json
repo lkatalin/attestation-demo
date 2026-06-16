@@ -1,0 +1,13 @@
+{
+  "submods": {
+    "cpu0": {
+      "ear.veraison.annotated-evidence": {
+        "sample": {
+          "productId": "",
+          "svn": ""
+        }
+      },
+      "ear.status": "affirming"
+    }
+  }
+}

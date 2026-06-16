@@ -1,0 +1,34 @@
+# Build kbs-client with SNP attester for linux/amd64 (peer-pod guests).
+# Build context must be the trustee repo root: TRUSTEE_DIR (see scripts/build-kbs-client.sh).
+FROM docker.io/library/rust:1.85-bookworm AS builder
+
+ARG KBS_CLIENT_FEATURES=az-snp-vtpm-attester
+ARG KBS_CLIENT_TARGET=x86_64-unknown-linux-gnu
+
+# az-snp-vtpm-attester links tss-esapi (vTPM quotes); match trustee kbs/docker/Dockerfile deps.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    git \
+    cmake \
+    clang \
+    libtss2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /trustee
+COPY . .
+
+WORKDIR /trustee/kbs
+RUN rustup target add "${KBS_CLIENT_TARGET}"
+RUN cargo build -p kbs-client \
+    --locked \
+    --release \
+    --no-default-features \
+    --features "${KBS_CLIENT_FEATURES}" \
+    --target "${KBS_CLIENT_TARGET}"
+
+FROM debian:bookworm-slim AS export
+ARG KBS_CLIENT_TARGET=x86_64-unknown-linux-gnu
+COPY --from=builder "/trustee/target/${KBS_CLIENT_TARGET}/release/kbs-client" /usr/local/bin/kbs-client
+RUN chmod +x /usr/local/bin/kbs-client

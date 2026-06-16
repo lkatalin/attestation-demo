@@ -31,11 +31,16 @@ for sec in "$DEK_SECRET_NAME" "$SIG_SECRET" "$POLICY_SECRET"; do
   [[ "$listed" != "null" ]] && check "kbsSecretResources contains $sec" 1 || check "kbsSecretResources contains $sec" 0
 done
 
-echo "==> Resource policy (AzSnpVtpm)"
-if oc get configmap "$RESOURCE_POLICY_CM" -n "$NS" -o jsonpath='{.data.policy\.rego}' 2>/dev/null | grep -q AzSnpVtpm; then
-  check "resource policy mentions AzSnpVtpm" 1
+echo "==> Resource policy (production: az-snp-vtpm claim key)"
+if oc get configmap "$RESOURCE_POLICY_CM" -n "$NS" -o jsonpath='{.data.policy\.rego}' 2>/dev/null | grep -qF 'az-snp-vtpm'; then
+  check "resource policy uses JWT key az-snp-vtpm" 1
 else
-  check "resource policy mentions AzSnpVtpm" 0
+  check "resource policy uses JWT key az-snp-vtpm" 0
+fi
+if oc get configmap "$RESOURCE_POLICY_CM" -n "$NS" -o jsonpath='{.data.policy\.rego}' 2>/dev/null | grep -qE '\["AzSnpVtpm"\]'; then
+  check "resource policy avoids PascalCase AzSnpVtpm path" 0
+else
+  check "resource policy avoids PascalCase AzSnpVtpm path" 1
 fi
 
 echo "==> Remote reachability"

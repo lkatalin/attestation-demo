@@ -1,0 +1,7 @@
+{
+  "label": "golden-cvm",
+  "measurement": "REPLACE_WITH_CAPTURED_HEX",
+  "pcr11": "REPLACE_WITH_CAPTURED_HEX",
+  "source": "policy-dry-run/capture-claims.sh after tee=AzSnpVtpm attest",
+  "notes": "Regenerate when OSC pod VM image or initdata changes (make sync-trustee-attestation)"
+}

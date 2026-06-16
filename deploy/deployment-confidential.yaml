@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-confidential
+  namespace: confidential-inferencing
+  labels:
+    app: inference-confidential
+    demo-role: confidential
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference-confidential
+  template:
+    metadata:
+      labels:
+        app: inference-confidential
+        demo-role: confidential
+      # Guest /aa/token for capture: make enable-peer-pods-guest-rest-api (kata-oc config)
+    spec:
+      runtimeClassName: kata-remote
+      imagePullSecrets:
+        - name: inference-demo-pull
+      containers:
+        - name: inference
+          image: ${IMAGE}
+          imagePullPolicy: Always
+          command: ["/bin/bash", "/config/entrypoint.sh"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DEMO_MODE
+              value: confidential
+            - name: KBS_URL
+              value: "${KBS_URL}"
+            - name: KBS_CERT_FILE
+              value: /etc/kbs/ca.pem
+            - name: KBS_RESOURCE_PATH
+              value: "${KBS_RESOURCE_PATH}"
+            - name: CDH_DEK_PATH
+              value: "/run/confidential-containers/cdh/kbs/${KBS_RESOURCE_PATH}"
+            - name: CDH_DEK_WAIT_SECS
+              value: "120"
+            - name: PORT
+              value: "8080"
+          volumeMounts:
+            - name: kbs-ca
+              mountPath: /etc/kbs
+              readOnly: true
+            - name: entrypoint
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+      volumes:
+        - name: kbs-ca
+          configMap:
+            name: kbs-ca
+        - name: entrypoint
+          configMap:
+            name: inference-entrypoint
+            defaultMode: 0555

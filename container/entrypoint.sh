@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# OpenShift default SCC runs as random UID; use /tmp (always writable).
+DATA_DIR="${DATA_DIR:-/tmp/inference-data}"
+mkdir -p "$DATA_DIR"
+
+DEMO_MODE="${DEMO_MODE:-confidential}"
+ENC_MODEL="${ENC_MODEL:-/app/encrypted/model.pt.enc}"
+MANIFEST="${MANIFEST:-/app/encrypted/manifest.json}"
+PLAINTEXT_MODEL="${PLAINTEXT_MODEL:-/app/plaintext/model.pt}"
+MODEL_PT="${MODEL_PATH:-$DATA_DIR/model.pt}"
+DEK_FILE="${DEK_FILE:-$DATA_DIR/dek.bin}"
+
+log() { echo "[entrypoint] DEMO_MODE=$DEMO_MODE $*"; }
+
+load_plaintext_demo() {
+  [[ -f "$PLAINTEXT_MODEL" ]] || {
+    echo "plaintext demo model missing at $PLAINTEXT_MODEL"
+    exit 1
+  }
+  cp "$PLAINTEXT_MODEL" "$MODEL_PT"
+  log "Loaded demo plaintext weights (no KBS, no decrypt) — control arm only"
+  export MODEL_PATH="$MODEL_PT"
+  export MANIFEST_PATH=""
+  export DEMO_RUNTIME="plaintext-control"
+}
+
+validate_dek_file() {
+  local dek_len
+  dek_len="$(wc -c <"$DEK_FILE")"
+  [[ "$dek_len" -eq 32 ]] || { echo "unexpected DEK length: $dek_len (want 32)"; exit 1; }
+  chmod 600 "$DEK_FILE"
+  log "DEK ready ($dek_len bytes)"
+}
+
+load_dek_from_cdh() {
+  local path="${CDH_DEK_PATH:-/run/confidential-containers/cdh/kbs/${KBS_RESOURCE_PATH:-default/confidential-inferencing-dek/dek}}"
+  [[ -f "$path" ]] || return 1
+
+  cp "$path" "$DEK_FILE"
+  local dek_len
+  dek_len="$(wc -c <"$DEK_FILE")"
+  if [[ "$dek_len" -eq 32 ]]; then
+    log "DEK loaded from CDH credential file (guest boot prefetch)"
+    return 0
+  fi
+
+  if base64 -d <"$path" >"$DEK_FILE" 2>/dev/null; then
+    dek_len="$(wc -c <"$DEK_FILE")"
+    if [[ "$dek_len" -eq 32 ]]; then
+      log "DEK loaded from CDH credential file (base64)"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+debug_cdh_visibility() {
+  log "CDH debug: uid=$(id -u) gid=$(id -g)"
+  if [[ -d /run/confidential-containers ]]; then
+    log "CDH debug: /run/confidential-containers exists: $(ls -la /run/confidential-containers 2>&1 | tr '\n' ' ')"
+  else
+    log "CDH debug: /run/confidential-containers missing (expected in workload mount namespace)"
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    local code
+    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 \
+      "${CDH_REST_URL:-http://127.0.0.1:8006}/cdh/resource/${KBS_RESOURCE_PATH:-default/confidential-inferencing-dek/dek}" \
+      2>/dev/null || echo curl-fail)"
+    log "CDH debug: REST GET /cdh/resource/... HTTP $code"
+  fi
+}
+
+fetch_dek_via_cdh_rest() {
+  local base="${CDH_REST_URL:-http://127.0.0.1:8006}"
+  local path="${KBS_RESOURCE_PATH:-default/confidential-inferencing-dek/dek}"
+  local url="${base}/cdh/resource/${path}"
+  local wait_secs="${CDH_DEK_WAIT_SECS:-120}"
+  local i=0
+
+  command -v curl >/dev/null 2>&1 || return 1
+
+  log "Waiting for CDH REST API at $url (pod network namespace)"
+  while [[ "$i" -lt "$wait_secs" ]]; do
+    if curl -sf "$url" -o "$DEK_FILE" 2>/dev/null; then
+      local dek_len
+      dek_len="$(wc -c <"$DEK_FILE")"
+      if [[ "$dek_len" -eq 32 ]]; then
+        log "DEK fetched via CDH REST API ($dek_len bytes)"
+        return 0
+      fi
+      if base64 -d <"$DEK_FILE" >"${DEK_FILE}.raw" 2>/dev/null; then
+        dek_len="$(wc -c <"${DEK_FILE}.raw")"
+        if [[ "$dek_len" -eq 32 ]]; then
+          mv "${DEK_FILE}.raw" "$DEK_FILE"
+          log "DEK fetched via CDH REST API (base64, $dek_len bytes)"
+          return 0
+        fi
+        rm -f "${DEK_FILE}.raw"
+      fi
+      rm -f "$DEK_FILE"
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+fetch_dek_via_cdh_tool() {
+  local sock_path="${CDH_SOCKET_PATH:-/run/confidential-containers/cdh.sock}"
+  local sock_uri="unix://${sock_path}"
+  local resource_uri="kbs:///${KBS_RESOURCE_PATH:-default/confidential-inferencing-dek/dek}"
+  local wait_secs="${CDH_DEK_WAIT_SECS:-120}"
+  local i=0
+
+  command -v ttrpc-cdh-tool >/dev/null 2>&1 || return 1
+
+  log "Waiting for CDH socket at $sock_path"
+  while [[ ! -S "$sock_path" && "$i" -lt "$wait_secs" ]]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  [[ -S "$sock_path" ]] || return 1
+
+  log "Fetching DEK via CDH GetResource path=$KBS_RESOURCE_PATH (runtime SNP attestation)"
+  ttrpc-cdh-tool --socket "$sock_uri" get-resource --resource-uri "$resource_uri" \
+    | base64 -d >"$DEK_FILE"
+}
+
+fetch_dek_via_kbs_client() {
+  KBS_URL="${KBS_URL:?KBS_URL must be set for DEMO_MODE=confidential}"
+  KBS_CERT_FILE="${KBS_CERT_FILE:-/etc/kbs/ca.pem}"
+  KBS_RESOURCE_PATH="${KBS_RESOURCE_PATH:-default/confidential-inferencing-dek/dek}"
+
+  local args=(--url "$KBS_URL" get-resource --path "$KBS_RESOURCE_PATH")
+  if [[ -f "$KBS_CERT_FILE" ]]; then
+    args=(--url "$KBS_URL" --cert-file "$KBS_CERT_FILE" get-resource --path "$KBS_RESOURCE_PATH")
+  fi
+
+  log "Fetching DEK via kbs-client path=$KBS_RESOURCE_PATH (fallback; needs vTPM in container)"
+  kbs-client "${args[@]}" | base64 -d >"$DEK_FILE"
+}
+
+fetch_dek() {
+  KBS_RESOURCE_PATH="${KBS_RESOURCE_PATH:-default/confidential-inferencing-dek/dek}"
+  export CDH_DEK_PATH="${CDH_DEK_PATH:-/run/confidential-containers/cdh/kbs/$KBS_RESOURCE_PATH}"
+
+  if fetch_dek_via_cdh_rest; then
+    validate_dek_file
+    return 0
+  fi
+
+  if fetch_dek_via_cdh_tool; then
+    validate_dek_file
+    return 0
+  fi
+
+  if load_dek_from_cdh; then
+    validate_dek_file
+    return 0
+  fi
+
+  debug_cdh_visibility
+  log "CDH paths unavailable — fallback to kbs-client (baseline / non-CVM)"
+  fetch_dek_via_kbs_client
+  validate_dek_file
+}
+
+decrypt_model() {
+  [[ -f "$ENC_MODEL" ]] || { echo "missing $ENC_MODEL"; exit 1; }
+  [[ -f "$MANIFEST" ]] || { echo "missing $MANIFEST"; exit 1; }
+  [[ -f "$DEK_FILE" ]] || { echo "missing DEK"; exit 1; }
+
+  log "Decrypting model.pt.enc (AES-256-GCM)"
+  python3 - <<PY
+import hashlib
+import json
+from pathlib import Path
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+manifest = json.loads(Path("$MANIFEST").read_text())
+dek = Path("$DEK_FILE").read_bytes()
+iv = bytes.fromhex(manifest["iv_hex"])
+ct = Path("$ENC_MODEL").read_bytes()
+pt = AESGCM(dek).decrypt(iv, ct, None)
+out = Path("$MODEL_PT")
+out.write_bytes(pt)
+expected = manifest["plaintext_sha256"]
+actual = hashlib.sha256(pt).hexdigest()
+if expected != actual:
+    raise SystemExit(f"sha256 mismatch expected={expected} actual={actual}")
+print("decrypted", len(pt), "bytes")
+PY
+  cp "$MANIFEST" "$DATA_DIR/manifest.json"
+  rm -f "$DEK_FILE"
+  log "Plaintext weights exist only in memory/disk under $DATA_DIR (ephemeral)"
+  export MODEL_PATH="$MODEL_PT"
+  export MANIFEST_PATH="$DATA_DIR/manifest.json"
+  export DEMO_RUNTIME="confidential"
+}
+
+run_confidential_startup() {
+  fetch_dek
+  decrypt_model
+}
+
+case "$DEMO_MODE" in
+  confidential)
+    run_confidential_startup
+    ;;
+  plaintext)
+    load_plaintext_demo
+    ;;
+  *)
+    echo "Unknown DEMO_MODE=$DEMO_MODE (use confidential or plaintext)"
+    exit 1
+    ;;
+esac
+
+export DEMO_MODE
+log "Starting inference server on :${PORT:-8080}"
+exec uvicorn server:app --host 0.0.0.0 --port "${PORT:-8080}"

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-baseline-encrypted
+  namespace: confidential-inferencing
+  labels:
+    app: inference-baseline-encrypted
+    demo-role: baseline-encrypted-fail
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference-baseline-encrypted
+  template:
+    metadata:
+      labels:
+        app: inference-baseline-encrypted
+        demo-role: baseline-encrypted-fail
+    spec:
+      # Same image + confidential entrypoint, but NOT a confidential VM.
+      # Expected: CrashLoopBackOff — cannot attest / unlock DEK.
+      imagePullSecrets:
+        - name: inference-demo-pull
+      containers:
+        - name: inference
+          image: ${IMAGE}
+          imagePullPolicy: Always
+          env:
+            - name: DEMO_MODE
+              value: confidential
+            - name: KBS_URL
+              value: "${KBS_URL}"
+            - name: KBS_CERT_FILE
+              value: /etc/kbs/ca.pem
+            - name: KBS_RESOURCE_PATH
+              value: "${KBS_RESOURCE_PATH}"
+            - name: PORT
+              value: "8080"
+          volumeMounts:
+            - name: kbs-ca
+              mountPath: /etc/kbs
+              readOnly: true
+      volumes:
+        - name: kbs-ca
+          configMap:
+            name: kbs-ca

@@ -1,0 +1,6 @@
+# Expected Trustee log patterns (extended regex) for check-attestation-slo.sh --scrape-logs
+# Good signs after confidential pod start:
+Verifier/endorsement check passed\. tee=AzSnpVtpm
+GET .*/trustee-image-policy/policy HTTP/1\.1" 200
+GET .*/confidential-inferencing-dek/dek HTTP/1\.1" 200
+POST /kbs/v0/attest HTTP/1\.1" 200

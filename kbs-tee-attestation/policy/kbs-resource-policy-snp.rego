@@ -6,5 +6,5 @@ default allow = false
 
 allow if {
 	data.plugin == "resource"
-	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["AzSnpVtpm"]
+	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["az-snp-vtpm"]
 }

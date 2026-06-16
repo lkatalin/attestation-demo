@@ -1,0 +1,13 @@
+artifacts/
+config/local.env
+config/inference-remote.env
+config/operator.env
+.venv-train/
+deploy/kbs.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+cosign.key
+policy/kbs-resource-policy-snp-production.rego
+policy/cvm-pins.json

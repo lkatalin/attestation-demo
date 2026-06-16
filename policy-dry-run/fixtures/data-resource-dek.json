@@ -1,0 +1,4 @@
+{
+  "plugin": "resource",
+  "resource-path": ["default", "confidential-inferencing-dek", "dek"]
+}

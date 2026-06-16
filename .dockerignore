@@ -1,0 +1,6 @@
+.git
+.venv-train
+# DEK must never enter the image; plaintext model.pt is required for DEMO_MODE=plaintext.
+artifacts/dek.bin
+artifacts/cosign.key
+**/__pycache__

@@ -1,0 +1,13 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: inference-confidential
+  namespace: confidential-inferencing
+spec:
+  to:
+    kind: Service
+    name: inference-confidential
+  port:
+    targetPort: http
+  tls:
+    termination: edge

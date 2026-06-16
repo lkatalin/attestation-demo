@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-plaintext
+  namespace: confidential-inferencing
+  labels:
+    app: inference-plaintext
+    demo-role: plaintext-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference-plaintext
+  template:
+    metadata:
+      labels:
+        app: inference-plaintext
+        demo-role: plaintext-control
+    spec:
+      # Ordinary worker container — no peer pod / no KBS unlock path.
+      imagePullSecrets:
+        - name: inference-demo-pull
+      containers:
+        - name: inference
+          image: ${IMAGE}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DEMO_MODE
+              value: plaintext
+            - name: PORT
+              value: "8080"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20

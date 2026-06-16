@@ -1,0 +1,54 @@
+# Minimal kata-remote pod to export attestation token from inside the pod network namespace.
+# Uses the same signed inference image as inference-confidential (guest image policy).
+# Apply via capture-golden-via-probe.sh (substitutes ${IMAGE}).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: attest-probe
+  namespace: confidential-inferencing
+  labels:
+    app: attest-probe
+    demo-role: attest-probe
+spec:
+  runtimeClassName: kata-remote
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: inference-demo-pull
+  containers:
+    - name: probe
+      image: ${IMAGE}
+      imagePullPolicy: Always
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          REST="http://127.0.0.1:8006"
+          echo "==> attest-probe: waiting for guest REST on ${REST}"
+          for i in $(seq 1 90); do
+            if curl -sf -o /dev/null -m 3 "${REST}/cdh/resource/default/confidential-inferencing-dek/dek" 2>/dev/null; then
+              echo "==> CDH REST up (${i}s)"
+              break
+            fi
+            sleep 2
+          done
+          echo "==> GET ${REST}/aa/token?token_type=kbs"
+          HTTP=$(curl -sS -m 120 -o /tmp/token.json -w '%{http_code}' "${REST}/aa/token?token_type=kbs" || echo 000)
+          echo "==> AA token HTTP ${HTTP}"
+          if [ "$HTTP" = "200" ] && [ -s /tmp/token.json ]; then
+            echo "==> CAPTURE_JWT_BEGIN"
+            python3 -c 'import json; print(json.load(open("/tmp/token.json")).get("token",""))'
+            echo "==> CAPTURE_JWT_END"
+            exit 0
+          fi
+          echo "==> token fetch failed (HTTP ${HTTP})"
+          head -c 200 /tmp/token.json 2>/dev/null || true
+          echo
+          exit 1
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        runAsUser: 1001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
