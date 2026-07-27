@@ -12,18 +12,27 @@ import rego.v1
 
 default allow = false
 
+# Helper to get SNP evidence (supports both Trustee v1.0.0 and v1.1.0+ formats)
+snp_evidence := input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["az-snp-vtpm"] if {
+	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["az-snp-vtpm"]
+}
+
+snp_evidence := input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["azsnpvtpm"] if {
+	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["azsnpvtpm"]
+}
+
 # Replace with values from captured/input-*.json (capture-claims.sh prints these).
 snp_measurement if {
-	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["az-snp-vtpm"]["measurement"] == "MEASUREMENT_HEX"
+	snp_evidence["measurement"] == "MEASUREMENT_HEX"
 }
 
 snp_pcr11 if {
-	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["az-snp-vtpm"]["tpm"]["pcr11"] == "PCR11_HEX"
+	snp_evidence["tpm"]["pcr11"] == "PCR11_HEX"
 }
 
 allow if {
 	data.plugin == "resource"
-	input["submods"]["cpu0"]["ear.veraison.annotated-evidence"]["az-snp-vtpm"]
+	snp_evidence
 	snp_measurement
 	snp_pcr11
 }
