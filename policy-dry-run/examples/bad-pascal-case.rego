@@ -1,4 +1,4 @@
-# Intentionally wrong — uses PascalCase log label instead of JWT key az-snp-vtpm.
+# Intentionally wrong — uses PascalCase log label instead of JWT key az-snp-vtpm or azsnpvtpm.
 package policy
 import rego.v1
 

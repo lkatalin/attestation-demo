@@ -24,9 +24,7 @@ ce build --platform "$BUILD_PLATFORM" \
 
 ce run --rm --platform "$BUILD_PLATFORM" \
   -v "$(dirname "$OUT"):/out:Z" \
-  --entrypoint cp \
-  "$IMG" /usr/local/bin/ttrpc-cdh-tool "/out/$(basename "$OUT")"
-
-chmod +x "$OUT"
+  --entrypoint sh \
+  "$IMG" -c "cp /usr/local/bin/ttrpc-cdh-tool /out/$(basename "$OUT") && chmod +x /out/$(basename "$OUT") && chown $(id -u):$(id -g) /out/$(basename "$OUT")"
 file "$OUT"
 echo "Installed $OUT"
