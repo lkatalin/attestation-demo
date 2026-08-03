@@ -21,7 +21,7 @@ oc whoami >/dev/null || { echo "oc login required" >&2; exit 1; }
 
 echo "==> Patching $CM (allow AzSnpVtpm only — baseline sample attester denied)"
 oc patch configmap "$CM" -n "$NS" --type merge \
-  -p "$(jq -nc --rawfile p "$POLICY_FILE" '{data: {"policy.rego": $p}}')"
+  -p "$(jq -nc --rawfile p "$POLICY_FILE" '{data: {"resource-policy.rego": $p}}')"
 
 oc rollout restart deployment/trustee-deployment -n "$NS"
 oc rollout status deployment/trustee-deployment -n "$NS" --timeout=300s

@@ -11,6 +11,21 @@ set -e
 #   Before: api-edm2xw4n-eastus-aroapp-io:6443
 #   After:  lily-infra
 
+echo "=== Cleaning up dead contexts ==="
+oc config get-contexts -o name | while read ctx; do
+    if timeout 3 oc --context=$ctx whoami &>/dev/null; then
+      echo "✓ $ctx - ACTIVE (keeping)"
+    else
+      echo "✗ $ctx - DEAD (deleting context and cluster)"
+      cluster=$(oc config view --context=$ctx -o jsonpath='{.context.cluster}' 2>/dev/null)
+      oc config delete-context $ctx
+      if [ -n "$cluster" ]; then
+        oc config delete-cluster $cluster 2>/dev/null
+      fi
+    fi
+  done
+echo ""
+
 echo "=== Updating oc context names from ARO cluster names ==="
 
 # Get ARO clusters with JSON output for reliable parsing

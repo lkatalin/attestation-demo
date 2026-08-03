@@ -19,10 +19,12 @@ printf '%s\n' "$KBS_URL" >"$OUT_DIR/kbs.url"
 oc get secret trustee-tls-cert -n "$NS" -o jsonpath='{.data.tls\.crt}' | base64 -d >"$OUT_DIR/kbs-ca.pem"
 printf '%s\n' "$KBS_RESOURCE_PATH" >"$OUT_DIR/kbs-resource-path.txt"
 
-if [[ -n "${OPERATOR_INITDATA_PATH:-}" && -f "$OPERATOR_INITDATA_PATH" ]]; then
-  cp -f "$OPERATOR_INITDATA_PATH" "$OUT_DIR/initdata.toml"
-elif [[ -f "$ROOT/../coco-infra/aro/trustee/initdata.toml" ]]; then
-  cp -f "$ROOT/../coco-infra/aro/trustee/initdata.toml" "$OUT_DIR/initdata.toml"
+PEER_NS=openshift-sandboxed-containers-operator
+INITDATA_B64="$(oc get configmap peer-pods-cm -n "$PEER_NS" -o jsonpath='{.data.INITDATA}' 2>/dev/null || true)"
+if [[ -n "$INITDATA_B64" ]]; then
+  echo "$INITDATA_B64" | base64 -d | gunzip > "$OUT_DIR/initdata.toml"
+else
+  echo "WARNING: no INITDATA in peer-pods-cm — skipping initdata.toml export" >&2
 fi
 
 echo "KBS endpoint files in $OUT_DIR:"

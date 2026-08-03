@@ -37,7 +37,7 @@ echo "==> Waiting for confidential + plaintext (baseline expected to fail)"
 echo "    Peer pods can take 15-30+ min on first CVM; progress deadline may need a retry."
 echo "    If sandbox events show Standard_DC* not available in region, fix peer-pods AZURE_INSTANCE_SIZE (see README)."
 
-if ! oc rollout status deployment/inference-confidential -n confidential-inferencing --timeout=900s; then
+if ! oc rollout status deployment/inference-confidential -n confidential-inferencing --timeout=2400s; then
   echo ""
   echo "ERROR: inference-confidential did not become ready."
   echo "  oc describe pod -n confidential-inferencing -l app=inference-confidential | tail -40"
